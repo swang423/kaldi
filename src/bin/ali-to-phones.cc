@@ -38,11 +38,13 @@ int main(int argc, char *argv[]) {
         " ali-to-phones 1.mdl ark:1.ali ark:-\n"
         "or:\n"
         " ali-to-phones --ctm-output 1.mdl ark:1.ali 1.ctm\n"
-        "See also: show-alignments lattice-align-phones, compare-int-vector\n";
+        "See also: show-alignments lattice-align-phones\n";
     ParseOptions po(usage);
     bool per_frame = false;
     bool write_lengths = false;
     bool ctm_output = false;
+    bool to_zerobase = false;
+    std::string to_phoneme = "";
     BaseFloat frame_shift = 0.01;
     po.Register("ctm-output", &ctm_output,
                 "If true, output the alignments in ctm format "
@@ -54,7 +56,9 @@ int main(int argc, char *argv[]) {
                 "(else phone sequence)");
     po.Register("write-lengths", &write_lengths,
                 "If true, write the #frames for each phone (different format)");
-
+    po.Register("to-zerobase", &to_zerobase,
+                "If true, shift down by 1 to create 0-based pdf (useful for convert into posterior");
+    po.Register("to-phoneme", &to_phoneme, "If given, convert monophone pdf to phoneme (about 40 dims with the given kaldi object, basically a look up table. See kaldi17/egs/wsj/local/wsj_monophone_to_phone.sh for how to convert data/lang/phones.txt to the desired format.");
 
     po.Read(argc, argv);
 
@@ -78,6 +82,10 @@ int main(int argc, char *argv[]) {
     Int32PairVectorWriter pair_writer(ctm_output ? empty :
                                       (write_lengths ? po.GetArg(3) : empty));
 
+    Vector<BaseFloat> lookup_table;
+    if(to_phoneme != ""){
+        ReadKaldiObject(to_phoneme, &lookup_table);
+    }
     std::string ctm_wxfilename(ctm_output ? po.GetArg(3) : empty);
     Output ctm_writer(ctm_wxfilename, false);
     if (ctm_output) {
@@ -99,6 +107,10 @@ int main(int argc, char *argv[]) {
         for (size_t i = 0; i < split.size(); i++) {
           KALDI_ASSERT(!split[i].empty());
           int32 phone = trans_model.TransitionIdToPhone(split[i][0]);
+          if (to_phoneme != "")
+            phone = (int32)lookup_table(phone);
+          if(to_zerobase)
+            phone--;
           int32 num_repeats = split[i].size();
           ctm_writer.Stream() << key << " 1 " << phone_start << " "
                       << (frame_shift * num_repeats) << " " << phone << std::endl;
@@ -109,6 +121,10 @@ int main(int argc, char *argv[]) {
         for (size_t i = 0; i < split.size(); i++) {
           KALDI_ASSERT(!split[i].empty());
           int32 phone = trans_model.TransitionIdToPhone(split[i][0]);
+          if (to_phoneme != "")
+            phone = (int32)lookup_table(phone);
+          if(to_zerobase)
+            phone--;
           int32 num_repeats = split[i].size();
           //KALDI_ASSERT(num_repeats!=0);
           if (per_frame)
@@ -123,6 +139,10 @@ int main(int argc, char *argv[]) {
         for (size_t i = 0; i < split.size(); i++) {
           KALDI_ASSERT(split[i].size() > 0);
           int32 phone = trans_model.TransitionIdToPhone(split[i][0]);
+          if (to_phoneme != "")
+            phone = (int32)lookup_table(phone);
+          if(to_zerobase)
+            phone--;
           int32 num_repeats = split[i].size();
           //KALDI_ASSERT(num_repeats!=0);
           pairs.push_back(std::make_pair(phone, num_repeats));
@@ -137,3 +157,5 @@ int main(int argc, char *argv[]) {
     return -1;
   }
 }
+
+
