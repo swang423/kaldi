@@ -24,6 +24,10 @@
 #include "nnet/nnet-activation.h"
 #include "nnet/nnet-affine-transform.h"
 #include "nnet/nnet-various.h"
+#include "nnet/nnet-fsmn.h"
+#include "nnet/nnet-deep-fsmn.h"
+#include "nnet/nnet-uni-fsmn.h"
+#include "nnet/nnet-uni-deep-fsmn.h"
 
 namespace kaldi {
 namespace nnet1 {
@@ -136,6 +140,34 @@ void Nnet::Feedforward(const CuMatrixBase<BaseFloat> &in,
   for (int32 i = 0; i < NumComponents(); i++) {
     out->Swap(&tmp_in);
     components_[i]->Propagate(tmp_in, out);
+  }
+}
+
+void Nnet::Feedbackward(const CuMatrixBase<BaseFloat> &out_diff,
+                         CuMatrix<BaseFloat> *in_diff) {
+  // Copy the derivative in case of empty network,
+  if (NumComponents() == 0) {
+    (*in_diff) = out_diff;  // copy,
+    return;
+  }
+  // We need C+1 buffers,
+  KALDI_ASSERT(static_cast<int32>(propagate_buf_.size()) == NumComponents()+1);
+  if (backpropagate_buf_.size() != NumComponents()+1) {
+    backpropagate_buf_.resize(NumComponents()+1);
+  }
+  // Copy 'out_diff' to last buffer,
+  backpropagate_buf_[NumComponents()] = out_diff;
+  // Loop from last Component to the first,
+  for (int32 i = NumComponents()-1; i >= 0; i--) {
+    // Backpropagate through 'Component',
+    components_[i]->Backpropagate(propagate_buf_[i],
+                                  propagate_buf_[i+1],
+                                  backpropagate_buf_[i+1],
+                                  &backpropagate_buf_[i]);
+  }
+  // Export the derivative (if applicable),
+  if (NULL != in_diff) {
+    (*in_diff) = backpropagate_buf_[0];
   }
 }
 
@@ -358,6 +390,9 @@ void Nnet::Read(std::istream &is, bool binary) {
     AppendComponentPointer(comp);
   }
   Check();
+  // create empty buffers
+  propagate_buf_.resize(NumComponents()+1);
+  backpropagate_buf_.resize(NumComponents()+1);
 }
 
 
@@ -514,7 +549,67 @@ void Nnet::SetTrainOptions(const NnetTrainOptions& opts) {
     }
   }
 }
+void Nnet::LhnAdaptation(const CuMatrix<BaseFloat> &out_diff, CuMatrix<BaseFloat> *in_diff, const CuMatrix<BaseFloat> &mean, const CuMatrix<BaseFloat> &pre) {
+  if(NumComponents() == 0) { KALDI_ERR << "Cannot backpropagate on empty network"; }
+  // we need at least L+1 input bufers
+  KALDI_ASSERT((int32)propagate_buf_.size() >= NumComponents()+1);
+  // we need at least L-1 error derivative bufers
+  KALDI_ASSERT((int32)backpropagate_buf_.size() >= NumComponents()-1);
+  //////////////////////////////////////
+  // Backpropagation
+  //
 
+  // we don't copy the out_diff to buffers, we use it as it is...
+  int32 i = components_.size()-1;
+//  std::cerr << Component::TypeToMarker(components_[i]->GetType())<<" " << components_[i]->OutputDim() << " " << components_[i]->InputDim() <<"\n";
+  components_.back()->Backpropagate(propagate_buf_[i], propagate_buf_[i+1],
+                              out_diff, &backpropagate_buf_[i-1]);
+  if (components_[i]->IsUpdatable()) {
+    UpdatableComponent *uc = dynamic_cast<UpdatableComponent*>(components_[i]);
+    uc->UpdatePrior(propagate_buf_[i], out_diff, mean, pre);
+  }
+
+//Output weights matrix
+i--;
+components_[i]->Backpropagate(propagate_buf_[i], propagate_buf_[i+1],
+                            backpropagate_buf_[i], &backpropagate_buf_[i-1]);
+//LHN
+i--;
+//std::cerr << Component::TypeToMarker(components_[i]->GetType())<<" " << components_[i]->OutputDim() << " " << components_[i]->InputDim() <<"\n";
+    components_[i]->Backpropagate(propagate_buf_[i], propagate_buf_[i+1],
+                            backpropagate_buf_[i], &backpropagate_buf_[i-1]);
+    if (components_[i]->IsUpdatable()) {
+      UpdatableComponent *uc = dynamic_cast<UpdatableComponent*>(components_[i]);
+      uc->UpdatePrior(propagate_buf_[i], backpropagate_buf_[i], mean, pre);
+    }
+  // backpropagate by using buffers
+  // update the first layer
+
+  //
+  // End of Backpropagation
+  //////////////////////////////////////
+}
+
+void Nnet::SetFlags(const Vector<BaseFloat> &flags) {    
+  for (int32 c = 0; c < NumComponents(); c++) {
+    if (GetComponent(c).GetType() == Component::kFsmn) {
+      Fsmn& comp = dynamic_cast<Fsmn&>(GetComponent(c));
+      comp.SetFlags(flags);
+    }
+    if (GetComponent(c).GetType() == Component::kDeepFsmn) {
+      DeepFsmn& comp = dynamic_cast<DeepFsmn&>(GetComponent(c));
+      comp.SetFlags(flags);
+    }
+    if (GetComponent(c).GetType() == Component::kUniFsmn) {
+      UniFsmn& comp = dynamic_cast<UniFsmn&>(GetComponent(c));
+      comp.SetFlags(flags);
+    }
+    if (GetComponent(c).GetType() == Component::kUniDeepFsmn) {
+      UniDeepFsmn& comp = dynamic_cast<UniDeepFsmn&>(GetComponent(c));
+      comp.SetFlags(flags);
+    }
+  }
+}
 
 }  // namespace nnet1
 }  // namespace kaldi

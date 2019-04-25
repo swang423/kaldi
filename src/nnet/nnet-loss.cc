@@ -124,6 +124,7 @@ void Xent::Eval(const VectorBase<BaseFloat> &frame_weights,
   entropy_aux_.MulRowsVec(frame_weights_);  // w*t*log(t)
   entropy_.AddRowSumMat(-1.0, CuMatrix<double>(entropy_aux_));
 
+  batch_loss_ = (-xentropy_aux_.Sum()+entropy_aux_.Sum())/frames_aux_.Sum();
   // progressive loss reporting
   if (opts_.loss_report_frames > 0) {
     frames_progress_ += frame_weights_.Sum();
@@ -254,8 +255,8 @@ void Mse::Eval(const VectorBase<BaseFloat> &frame_weights,
   diff_pow_2_.MulElements(diff_pow_2_);  // (y - t)^2
   diff_pow_2_.MulRowsVec(frame_weights_);  // w*(y - t)^2
   double mean_square_error = 0.5 * diff_pow_2_.Sum();  // sum the matrix,
-
   KALDI_ASSERT(KALDI_ISFINITE(mean_square_error));
+  batch_loss_ = mean_square_error/num_frames;
 
   // accumulate
   loss_ += mean_square_error;
@@ -361,6 +362,32 @@ void MultiTaskLoss::InitFromString(const std::string& s) {
   KALDI_ASSERT(loss_vec_.size() == loss_dim_.size());
   KALDI_ASSERT(loss_vec_.size() == loss_weights_.size());
 }
+void MultiTaskLoss::Eval(const VectorBase<BaseFloat> &frame_weights,
+            const CuMatrixBase<BaseFloat>& net_out,
+            const CuMatrixBase<BaseFloat>& tgt_mat_,
+            CuMatrix<BaseFloat>* diff) {
+  int32 num_frames = net_out.NumRows(),
+    num_output = net_out.NumCols();
+  KALDI_ASSERT(num_frames == tgt_mat_.NumRows());
+  KALDI_ASSERT(num_output == loss_dim_offset_.back());  // sum of loss-dims,
+  KALDI_ASSERT(num_output == tgt_mat_.NumCols());
+
+  // allocate diff matrix,
+  diff->Resize(num_frames, num_output);
+
+  // call the vector of loss functions,
+  CuMatrix<BaseFloat> diff_aux;
+  for (int32 i = 0; i < loss_vec_.size(); i++) {
+    loss_vec_[i]->Eval(frame_weights,
+      net_out.ColRange(loss_dim_offset_[i], loss_dim_[i]),
+      tgt_mat_.ColRange(loss_dim_offset_[i], loss_dim_[i]),
+      &diff_aux);
+    // Scale the gradients,
+    diff_aux.Scale(loss_weights_[i]);
+    // Copy to diff,
+    diff->ColRange(loss_dim_offset_[i], loss_dim_[i]).CopyFromMat(diff_aux);
+  }
+}
 
 void MultiTaskLoss::Eval(const VectorBase<BaseFloat> &frame_weights,
             const CuMatrixBase<BaseFloat>& net_out,
@@ -454,6 +481,97 @@ BaseFloat MultiTaskLoss::AvgLoss() {
     ans += val;
   }
   return ans;
+}
+/* Quartic */
+
+void Quartic::Eval(const VectorBase<BaseFloat> &frame_weights,
+               const CuMatrixBase<BaseFloat>& net_out,
+               const CuMatrixBase<BaseFloat>& target,
+               CuMatrix<BaseFloat>* diff) {
+  // check inputs,
+  KALDI_ASSERT(net_out.NumCols() == target.NumCols());
+  KALDI_ASSERT(net_out.NumRows() == target.NumRows());
+  KALDI_ASSERT(net_out.NumRows() == frame_weights.Dim());
+
+  KALDI_ASSERT(KALDI_ISFINITE(frame_weights.Sum()));
+  KALDI_ASSERT(KALDI_ISFINITE(net_out.Sum()));
+  KALDI_ASSERT(KALDI_ISFINITE(target.Sum()));
+
+  int32 num_frames = frame_weights.Sum();
+  KALDI_ASSERT(num_frames >= 0.0);
+
+  // get frame_weights to GPU,
+  frame_weights_ = frame_weights;
+
+  // compute derivative w.r.t. neural nerwork outputs
+  out_diff_ = net_out;
+  out_diff_.AddMat(-1.0, target);
+  *diff = out_diff_;
+  diff->ApplyPow(3.0);
+  diff->MulRowsVec(frame_weights_);  // weighting,
+
+  // Compute MeanSquareError loss of mini-batch
+  diff_pow_2_ = out_diff_;
+  diff_pow_2_.MulElements(diff_pow_2_);  // (y - t)^2
+  diff_pow_2_.MulElements(diff_pow_2_);  // (y - t)^4
+  diff_pow_2_.MulRowsVec(frame_weights_);  // w*(y - t)^2
+  double mean_square_error = 0.25 * diff_pow_2_.Sum();  // sum the matrix,
+  KALDI_ASSERT(KALDI_ISFINITE(mean_square_error));
+  batch_loss_ = mean_square_error/num_frames;
+
+  // accumulate
+  loss_ += mean_square_error;
+  frames_ += num_frames;
+
+  // progressive loss reporting
+  if (opts_.loss_report_frames > 0) {
+    frames_progress_ += num_frames;
+    loss_progress_ += mean_square_error;
+    if (frames_progress_ > opts_.loss_report_frames) {
+      KALDI_LOG << "ProgressLoss[last "
+                << static_cast<int>(frames_progress_/100/3600) << "h of "
+                << static_cast<int>(frames_/100/3600) << "h]: "
+                << loss_progress_/frames_progress_ << " (Quartic)";
+      // store
+      loss_vec_.push_back(loss_progress_/frames_progress_);
+      // reset
+      frames_progress_ = 0;
+      loss_progress_ = 0.0;
+    }
+  }
+}
+
+
+void Quartic::Eval(const VectorBase<BaseFloat> &frame_weights,
+               const CuMatrixBase<BaseFloat>& net_out,
+               const Posterior& post,
+               CuMatrix<BaseFloat>* diff) {
+  int32 num_frames = net_out.NumRows(),
+    num_nn_outputs = net_out.NumCols();
+  KALDI_ASSERT(num_frames == post.size());
+
+  // convert posterior to matrix,
+  PosteriorToMatrix(post, num_nn_outputs, &tgt_mat_);
+
+  // call the other eval function,
+  Eval(frame_weights, net_out, tgt_mat_, diff);
+}
+
+
+std::string Quartic::Report() {
+  // compute root mean square,
+  int32 num_tgt = diff_pow_2_.NumCols();
+  BaseFloat root_mean_square = sqrt(loss_/frames_/num_tgt);
+  // build the message,
+  std::ostringstream oss;
+  oss << "AvgLoss: " << loss_/frames_ << " (Quartic), "
+      << "[RMS " << root_mean_square << ", frames "
+      << frames_ << "]" << std::endl;
+  oss << "progress: [";
+  std::copy(loss_vec_.begin(), loss_vec_.end(),
+            std::ostream_iterator<float>(oss, " "));
+  oss << "]" << std::endl;
+  return oss.str();
 }
 
 }  // namespace nnet1

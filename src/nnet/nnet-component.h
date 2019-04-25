@@ -51,6 +51,7 @@ class Component {
     kAffineTransform,
     kLinearTransform,
     kConvolutionalComponent,
+    kConvolutional2DComponent,
     kLstmProjected,
     kBlstmProjected,
     kRecurrentComponent,
@@ -73,15 +74,24 @@ class Component {
     kBlockLinearity,
     kAddShift,
     kRescale,
+    kExpComponent,
+    kLogComponent,
 
     kKlHmm = 0x0800,
     kSentenceAveragingComponent, /* deprecated */
     kSimpleSentenceAveragingComponent,
     kAveragePoolingComponent,
+    kAveragePooling2DComponent,
     kMaxPoolingComponent,
+    kMaxPooling2DComponent,
     kFramePoolingComponent,
     kParallelComponent,
-    kMultiBasisComponent
+    kMultiBasisComponent,
+    //FSMN
+	kFsmn,
+    kDeepFsmn,
+    kUniFsmn,
+    kUniDeepFsmn
   } ComponentType;
 
   /// A pair of type and marker,
@@ -237,6 +247,10 @@ class UpdatableComponent : public Component {
   virtual void Update(const CuMatrixBase<BaseFloat> &input,
                       const CuMatrixBase<BaseFloat> &diff) = 0;
 
+  virtual void UpdatePrior(const CuMatrix<BaseFloat> &input,
+                           const CuMatrix<BaseFloat> &diff,
+                           const CuMatrix<BaseFloat> &mean,
+                           const CuMatrix<BaseFloat> &pre) {};
   /// Set the training options to the component,
   virtual void SetTrainOptions(const NnetTrainOptions &opts) {
     opts_ = opts;

@@ -52,7 +52,10 @@ class Nnet {
   /// Perform forward pass through the network (with 2 swapping buffers),
   void Feedforward(const CuMatrixBase<BaseFloat> &in,
                    CuMatrix<BaseFloat> *out);
+  void Feedbackward(const CuMatrixBase<BaseFloat> &out_diff,
+                     CuMatrix<BaseFloat> *in_diff);
 
+  void LhnAdaptation(const CuMatrix<BaseFloat> &out_diff, CuMatrix<BaseFloat> *in_diff, const CuMatrix<BaseFloat> &mean, const CuMatrix<BaseFloat> &pre);
   /// Dimensionality on network input (input feature dim.),
   int32 InputDim() const;
   /// Dimensionality of network outputs (posteriors | bn-features | etc.),
@@ -163,6 +166,7 @@ class Nnet {
   const NnetTrainOptions& GetTrainOptions() const {
     return opts_;
   }
+  void SetFlags(const Vector<BaseFloat> &flags);
 
  private:
   /// Vector which contains all the components composing the neural network,
