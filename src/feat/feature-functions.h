@@ -43,7 +43,7 @@ namespace kaldi {
 // energies of the fft bins from zero to the Nyquist frequency.  Contents of the
 // remaining (n/2) - 1 elements are undefined at output.
 void ComputePowerSpectrum(VectorBase<BaseFloat> *complex_fft);
-
+void ComputePhaseSpectrum(VectorBase<BaseFloat> *complex_fft);
 
 struct DeltaFeaturesOptions {
   int32 order;

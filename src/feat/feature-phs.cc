@@ -19,12 +19,12 @@
 // limitations under the License.
 
 
-#include "feat/feature-spectrogram.h"
+#include "feat/feature-phs.h"
 
 
 namespace kaldi {
 
-SpectrogramComputer::SpectrogramComputer(const SpectrogramOptions &opts)
+PhsComputer::PhsComputer(const PhsOptions &opts)
     : opts_(opts), srfft_(NULL) {
   if (opts.energy_floor > 0.0)
     log_energy_floor_ = Log(opts.energy_floor);
@@ -34,17 +34,17 @@ SpectrogramComputer::SpectrogramComputer(const SpectrogramOptions &opts)
     srfft_ = new SplitRadixRealFft<BaseFloat>(padded_window_size);
 }
 
-SpectrogramComputer::SpectrogramComputer(const SpectrogramComputer &other):
+PhsComputer::PhsComputer(const PhsComputer &other):
     opts_(other.opts_), log_energy_floor_(other.log_energy_floor_), srfft_(NULL) {
   if (other.srfft_ != NULL)
     srfft_ = new SplitRadixRealFft<BaseFloat>(*other.srfft_);
 }
 
-SpectrogramComputer::~SpectrogramComputer() {
+PhsComputer::~PhsComputer() {
   delete srfft_;
 }
 
-void SpectrogramComputer::Compute(BaseFloat signal_log_energy,
+void PhsComputer::Compute(BaseFloat signal_log_energy,
                                   BaseFloat vtln_warp,
                                   VectorBase<BaseFloat> *signal_frame,
                                   VectorBase<BaseFloat> *feature) {
@@ -63,20 +63,20 @@ void SpectrogramComputer::Compute(BaseFloat signal_log_energy,
     RealFft(signal_frame, true);
 
   // Convert the FFT into a power spectrum.
-  ComputePowerSpectrum(signal_frame);
-
-  SubVector<BaseFloat> power_spectrum(*signal_frame,
+  ComputePhaseSpectrum(signal_frame);
+  SubVector<BaseFloat> phase_spectrum(*signal_frame,
                                       0, signal_frame->Dim() / 2 + 1);
 
-  power_spectrum.ApplyFloor(std::numeric_limits<BaseFloat>::epsilon());
-  power_spectrum.ApplyLog();
-
-  feature->CopyFromVec(power_spectrum);
+  feature->CopyFromVec(phase_spectrum);
+/*
+  In speech enhancement, we keep the dc instead of the energy
   if (opts_.energy_floor > 0.0 && signal_log_energy < log_energy_floor_)
     signal_log_energy = log_energy_floor_;
   // The zeroth spectrogram component is always set to the signal energy,
   // instead of the square of the constant component of the signal.
   (*feature)(0) = signal_log_energy;
+*/
+
 }
 
 }  // namespace kaldi
