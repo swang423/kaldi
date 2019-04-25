@@ -1,21 +1,6 @@
-// nnetbin/nnet-train-frmshuff.cc
-
-// Copyright 2013-2016  Brno University of Technology (Author: Karel Vesely)
-
-// See ../../COPYING for clarification regarding multiple authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//  http://www.apache.org/licenses/LICENSE-2.0
-//
-// THIS CODE IS PROVIDED *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
-// WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
-// MERCHANTABLITY OR NON-INFRINGEMENT.
-// See the Apache 2 License for the specific language governing permissions and
-// limitations under the License.
+// This is more of a hack
+// Assume we have the clean alignment of utterance 400c001
+// We use this alignment for multi-condition feature 400c001_n001_SNR5
 
 #include "nnet/nnet-trnopts.h"
 #include "nnet/nnet-nnet.h"
@@ -63,13 +48,13 @@ int main(int argc, char *argv[]) {
     po.Register("feature-transform", &feature_transform,
         "Feature transform in Nnet format");
 
+    std::string targets_transform;
+    po.Register("targets-transform", &targets_transform,
+        "Targets transform in Nnet format");
+
     std::string objective_function = "xent";
     po.Register("objective-function", &objective_function,
         "Objective function : xent|mse|multitask");
-
-    int32 max_frames = 360000;
-    po.Register("max-frames", &max_frames,
-        "Maximum number of frames an utterance can have (skipped if longer)");
 
     int32 length_tolerance = 5;
     po.Register("length-tolerance", &length_tolerance,
@@ -88,20 +73,26 @@ int main(int argc, char *argv[]) {
     po.Register("use-gpu", &use_gpu,
         "yes|no|optional, only has effect if compiled with CUDA");
 
+    std::string corpus="wsj";
+    po.Register("corpus", &corpus, "wsj|timit");
+
+    int32 post_dim = 2008;
+    po.Register("post-dim", &post_dim,"posterior dimension");
     po.Read(argc, argv);
 
-    if (po.NumArgs() != 3 + (crossvalidate ? 0 : 1)) {
+    if (po.NumArgs() != 4 + (crossvalidate ? 0 : 1)) {
       po.PrintUsage();
       exit(1);
     }
 
     std::string feature_rspecifier = po.GetArg(1),
-      targets_rspecifier = po.GetArg(2),
-      model_filename = po.GetArg(3);
+      xent_targets_rspecifier = po.GetArg(2),
+      mse_targets_rspecifier = po.GetArg(3),
+      model_filename = po.GetArg(4);
 
     std::string target_model_filename;
     if (!crossvalidate) {
-      target_model_filename = po.GetArg(4);
+      target_model_filename = po.GetArg(5);
     }
 
     using namespace kaldi;
@@ -112,9 +103,12 @@ int main(int argc, char *argv[]) {
     CuDevice::Instantiate().SelectGpuId(use_gpu);
 #endif
 
-    Nnet nnet_transf;
+    Nnet nnet_transf,nnet_transt;
     if (feature_transform != "") {
       nnet_transf.Read(feature_transform);
+    }
+    if (targets_transform != ""){
+      nnet_transt.Read(targets_transform);
     }
 
     Nnet nnet;
@@ -129,7 +123,8 @@ int main(int argc, char *argv[]) {
     kaldi::int64 total_frames = 0;
 
     SequentialBaseFloatMatrixReader feature_reader(feature_rspecifier);
-    RandomAccessPosteriorReader targets_reader(targets_rspecifier);
+    SequentialBaseFloatMatrixReader mse_targets_reader(mse_targets_rspecifier);
+    RandomAccessPosteriorReader xent_targets_reader(xent_targets_rspecifier);
     RandomAccessBaseFloatVectorReader weights_reader;
     if (frame_weights != "") {
       weights_reader.Open(frame_weights);
@@ -141,7 +136,7 @@ int main(int argc, char *argv[]) {
 
     RandomizerMask randomizer_mask(rnd_opts);
     MatrixRandomizer feature_randomizer(rnd_opts);
-    PosteriorRandomizer targets_randomizer(rnd_opts);
+    MatrixRandomizer targets_randomizer(rnd_opts);
     VectorRandomizer weights_randomizer(rnd_opts);
 
     Xent xent(loss_opts);
@@ -156,8 +151,8 @@ int main(int argc, char *argv[]) {
       // 'multitask,<type1>,<dim1>,<weight1>,...,<typeN>,<dimN>,<weightN>'
       multitask.InitFromString(objective_function);
     }
-
-    CuMatrix<BaseFloat> feats_transf, nnet_out, obj_diff;
+    Matrix<BaseFloat> xent_targets_matrix;
+    CuMatrix<BaseFloat> feats_transf, tgt_transf, tgt_merge,nnet_out, obj_diff;
 
     Timer time;
     KALDI_LOG << (crossvalidate ? "CROSS-VALIDATION" : "TRAINING")
@@ -168,64 +163,66 @@ int main(int argc, char *argv[]) {
           num_other_error = 0;
 
     // main loop,
-    while (!feature_reader.Done()) {
+    while (!feature_reader.Done() && !mse_targets_reader.Done()) {
 #if HAVE_CUDA == 1
       // check that GPU computes accurately,
       CuDevice::Instantiate().CheckGpuHealth();
 #endif
       // fill the randomizer,
-      for ( ; !feature_reader.Done(); feature_reader.Next()) {
+      for ( ; !feature_reader.Done() && !mse_targets_reader.Done(); feature_reader.Next(),mse_targets_reader.Next()) {
         if (feature_randomizer.IsFull()) {
           // break the loop without calling Next(),
           // we keep the 'utt' for next round,
           break;
         }
         std::string utt = feature_reader.Key();
-        KALDI_VLOG(3) << "Reading " << utt;
+		std::size_t pos_underscore = utt.find("_"); //for wsj
+        if(corpus == "timit")
+    		pos_underscore = utt.find("_",pos_underscore+1); //for timit
+		KALDI_ASSERT(pos_underscore!=std::string::npos);
+		std::string utt_clean = utt.substr(0,pos_underscore);
+        KALDI_VLOG(3) << "Reading " << utt_clean;
         // check that we have targets,
-        if (!targets_reader.HasKey(utt)) {
-          KALDI_WARN << utt << ", missing targets";
+        if (!xent_targets_reader.HasKey(utt_clean)) {
+          KALDI_WARN << utt_clean << ", missing xent targets";
+          num_no_tgt_mat++;
+          continue;
+        }
+        if (utt != mse_targets_reader.Key()){
+          KALDI_WARN << utt << ", missing mse targets";
           num_no_tgt_mat++;
           continue;
         }
         // check we have per-frame weights,
-        if (frame_weights != "" && !weights_reader.HasKey(utt)) {
-          KALDI_WARN << utt << ", missing per-frame weights";
+        if (frame_weights != "" && !weights_reader.HasKey(utt_clean)) {
+          KALDI_WARN << utt_clean << ", missing per-frame weights";
           num_other_error++;
           continue;
         }
         // check we have per-utterance weights,
-        if (utt_weights != "" && !utt_weights_reader.HasKey(utt)) {
-          KALDI_WARN << utt << ", missing per-utterance weight";
+        if (utt_weights != "" && !utt_weights_reader.HasKey(utt_clean)) {
+          KALDI_WARN << utt_clean << ", missing per-utterance weight";
           num_other_error++;
           continue;
         }
         // get feature / target pair,
         Matrix<BaseFloat> mat = feature_reader.Value();
-        Posterior targets = targets_reader.Value(utt);
+        Matrix<BaseFloat> mse_targets = mse_targets_reader.Value();
+        Posterior xent_targets = xent_targets_reader.Value(utt_clean);
         // get per-frame weights,
         Vector<BaseFloat> weights;
         if (frame_weights != "") {
-          weights = weights_reader.Value(utt);
+          weights = weights_reader.Value(utt_clean);
         } else {  // all per-frame weights are 1.0,
           weights.Resize(mat.NumRows());
           weights.Set(1.0);
         }
         // multiply with per-utterance weight,
         if (utt_weights != "") {
-          BaseFloat w = utt_weights_reader.Value(utt);
+          BaseFloat w = utt_weights_reader.Value(utt_clean);
           KALDI_ASSERT(w >= 0.0);
           if (w == 0.0) continue;  // remove sentence from training,
           weights.Scale(w);
-        }
-
-        // skip too long utterances (or we run out of memory),
-        if (mat.NumRows() > max_frames) {
-          KALDI_WARN << "Utterance too long, skipping! " << utt
-            << " (length " << mat.NumRows() << ", max_frames "
-            << max_frames << ")";
-          num_other_error++;
-          continue;
         }
 
         // correct small length mismatch or drop sentence,
@@ -233,7 +230,8 @@ int main(int argc, char *argv[]) {
           // add lengths to vector,
           std::vector<int32> length;
           length.push_back(mat.NumRows());
-          length.push_back(targets.size());
+          length.push_back(mse_targets.NumRows());
+          length.push_back(xent_targets.size());
           length.push_back(weights.Dim());
           // find min, max,
           int32 min = *std::min_element(length.begin(), length.end());
@@ -242,10 +240,12 @@ int main(int argc, char *argv[]) {
           if (max - min < length_tolerance) {
             // we truncate to shortest,
             if (mat.NumRows() != min) mat.Resize(min, mat.NumCols(), kCopyData);
-            if (targets.size() != min) targets.resize(min);
+            if (mse_targets.NumRows() != min) mse_targets.Resize(min, mat.NumCols(), kCopyData);
+            if (xent_targets.size() != min) xent_targets.resize(min);
             if (weights.Dim() != min) weights.Resize(min, kCopyData);
           } else {
-            KALDI_WARN << "Length mismatch! Targets " << targets.size()
+            KALDI_WARN << "Length mismatch! Targets " << xent_targets.size()
+                        << ", MSE targets " << mse_targets.NumRows() 
                        << ", features " << mat.NumRows() << ", " << utt;
             num_other_error++;
             continue;
@@ -253,7 +253,7 @@ int main(int argc, char *argv[]) {
         }
         // apply feature transform (if empty, input is copied),
         nnet_transf.Feedforward(CuMatrix<BaseFloat>(mat), &feats_transf);
-
+        nnet_transt.Feedforward(CuMatrix<BaseFloat>(mse_targets),&tgt_transf);
         // remove frames with '0' weight from training,
         {
           // are there any frames to be removed? (frames with zero weight),
@@ -276,12 +276,15 @@ int main(int argc, char *argv[]) {
             tmp_feats.CopyRows(feats_transf, CuArray<MatrixIndexT>(keep_frames));
             tmp_feats.Swap(&feats_transf);
 
+            tmp_feats.Resize(keep_frames.size(),tgt_transf.NumCols());
+            tmp_feats.CopyRows(tgt_transf, CuArray<MatrixIndexT>(keep_frames));
+            tmp_feats.Swap(&tgt_transf);
             // filter targets,
             Posterior tmp_targets;
             for (int32 i = 0; i < keep_frames.size(); i++) {
-              tmp_targets.push_back(targets[keep_frames[i]]);
+              tmp_targets.push_back(xent_targets[keep_frames[i]]);
             }
-            tmp_targets.swap(targets);
+            tmp_targets.swap(xent_targets);
 
             // filter weights,
             Vector<BaseFloat> tmp_weights(keep_frames.size());
@@ -291,11 +294,15 @@ int main(int argc, char *argv[]) {
             tmp_weights.Swap(&weights);
           }
         }
-
         // pass data to randomizers,
-        KALDI_ASSERT(feats_transf.NumRows() == targets.size());
+        KALDI_ASSERT(feats_transf.NumRows() == xent_targets.size());
+        //merge post with mse
+        PosteriorToMatrix(xent_targets, post_dim, &xent_targets_matrix);
+        tgt_merge.Resize(feats_transf.NumRows(),post_dim + mse_targets.NumCols());
+        tgt_merge.ColRange(0,post_dim).CopyFromMat(xent_targets_matrix);
+        tgt_merge.ColRange(post_dim,mse_targets.NumCols()).CopyFromMat(tgt_transf);
         feature_randomizer.AddData(feats_transf);
-        targets_randomizer.AddData(targets);
+        targets_randomizer.AddData(tgt_merge);
         weights_randomizer.AddData(weights);
         num_done++;
 
@@ -323,7 +330,7 @@ int main(int argc, char *argv[]) {
                                           weights_randomizer.Next()) {
         // get block of feature/target pairs,
         const CuMatrixBase<BaseFloat>& nnet_in = feature_randomizer.Value();
-        const Posterior& nnet_tgt = targets_randomizer.Value();
+        const CuMatrixBase<BaseFloat>& nnet_tgt = targets_randomizer.Value();
         const Vector<BaseFloat>& frm_weights = weights_randomizer.Value();
 
         // forward pass,

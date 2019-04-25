@@ -114,7 +114,9 @@ int main(int argc, char *argv[]) {
                    Component::kParallelComponent);
       ParallelComponent& parallel_comp =
         dynamic_cast<ParallelComponent&>(nnet.GetComponent(component_id-1));
-      nnet = parallel_comp.GetNestedNnet(nested_id-1);  // replace!
+      //nnet = parallel_comp.GetNestedNnet(nested_id-1);  // replace!
+      const Nnet nnet2 = parallel_comp.GetNestedNnet(nested_id-1);  // replace!
+      nnet = nnet2;
     }
 
     // optionally remove N first components,

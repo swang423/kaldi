@@ -1,21 +1,6 @@
-// nnetbin/nnet-train-frmshuff.cc
-
-// Copyright 2013-2016  Brno University of Technology (Author: Karel Vesely)
-
-// See ../../COPYING for clarification regarding multiple authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//  http://www.apache.org/licenses/LICENSE-2.0
-//
-// THIS CODE IS PROVIDED *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
-// WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
-// MERCHANTABLITY OR NON-INFRINGEMENT.
-// See the Apache 2 License for the specific language governing permissions and
-// limitations under the License.
+// This is more of a hack
+// Assume we have the clean alignment of utterance 400c001
+// We use this alignment for multi-condition feature 400c001_n001_SNR5
 
 #include "nnet/nnet-trnopts.h"
 #include "nnet/nnet-nnet.h"
@@ -67,10 +52,6 @@ int main(int argc, char *argv[]) {
     po.Register("objective-function", &objective_function,
         "Objective function : xent|mse|multitask");
 
-    int32 max_frames = 360000;
-    po.Register("max-frames", &max_frames,
-        "Maximum number of frames an utterance can have (skipped if longer)");
-
     int32 length_tolerance = 5;
     po.Register("length-tolerance", &length_tolerance,
         "Allowed length mismatch of features/targets/weights "
@@ -87,6 +68,9 @@ int main(int argc, char *argv[]) {
     std::string use_gpu="yes";
     po.Register("use-gpu", &use_gpu,
         "yes|no|optional, only has effect if compiled with CUDA");
+
+    std::string corpus="wsj";
+    po.Register("corpus", &corpus, "wsj|timit");
 
     po.Read(argc, argv);
 
@@ -181,51 +165,47 @@ int main(int argc, char *argv[]) {
           break;
         }
         std::string utt = feature_reader.Key();
-        KALDI_VLOG(3) << "Reading " << utt;
+		std::size_t pos_underscore = utt.find("_"); //for wsj
+        if(corpus == "timit")
+    		pos_underscore = utt.find("_",pos_underscore+1); //for timit
+		KALDI_ASSERT(pos_underscore!=std::string::npos);
+		std::string utt_clean = utt.substr(0,pos_underscore);
+        KALDI_VLOG(3) << "Reading " << utt_clean;
         // check that we have targets,
-        if (!targets_reader.HasKey(utt)) {
-          KALDI_WARN << utt << ", missing targets";
+        if (!targets_reader.HasKey(utt_clean)) {
+          KALDI_WARN << utt_clean << ", missing targets";
           num_no_tgt_mat++;
           continue;
         }
         // check we have per-frame weights,
-        if (frame_weights != "" && !weights_reader.HasKey(utt)) {
-          KALDI_WARN << utt << ", missing per-frame weights";
+        if (frame_weights != "" && !weights_reader.HasKey(utt_clean)) {
+          KALDI_WARN << utt_clean << ", missing per-frame weights";
           num_other_error++;
           continue;
         }
         // check we have per-utterance weights,
-        if (utt_weights != "" && !utt_weights_reader.HasKey(utt)) {
-          KALDI_WARN << utt << ", missing per-utterance weight";
+        if (utt_weights != "" && !utt_weights_reader.HasKey(utt_clean)) {
+          KALDI_WARN << utt_clean << ", missing per-utterance weight";
           num_other_error++;
           continue;
         }
         // get feature / target pair,
         Matrix<BaseFloat> mat = feature_reader.Value();
-        Posterior targets = targets_reader.Value(utt);
+        Posterior targets = targets_reader.Value(utt_clean);
         // get per-frame weights,
         Vector<BaseFloat> weights;
         if (frame_weights != "") {
-          weights = weights_reader.Value(utt);
+          weights = weights_reader.Value(utt_clean);
         } else {  // all per-frame weights are 1.0,
           weights.Resize(mat.NumRows());
           weights.Set(1.0);
         }
         // multiply with per-utterance weight,
         if (utt_weights != "") {
-          BaseFloat w = utt_weights_reader.Value(utt);
+          BaseFloat w = utt_weights_reader.Value(utt_clean);
           KALDI_ASSERT(w >= 0.0);
           if (w == 0.0) continue;  // remove sentence from training,
           weights.Scale(w);
-        }
-
-        // skip too long utterances (or we run out of memory),
-        if (mat.NumRows() > max_frames) {
-          KALDI_WARN << "Utterance too long, skipping! " << utt
-            << " (length " << mat.NumRows() << ", max_frames "
-            << max_frames << ")";
-          num_other_error++;
-          continue;
         }
 
         // correct small length mismatch or drop sentence,
