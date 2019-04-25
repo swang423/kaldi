@@ -19,32 +19,33 @@
 // limitations under the License.
 
 
-#include "feat/feature-spectrogram.h"
+#include "feat/feature-framefft.h"
 
 
 namespace kaldi {
 
-SpectrogramComputer::SpectrogramComputer(const SpectrogramOptions &opts)
+FrameFftComputer::FrameFftComputer(const FrameFftOptions &opts)
     : opts_(opts), srfft_(NULL) {
   if (opts.energy_floor > 0.0)
     log_energy_floor_ = Log(opts.energy_floor);
 
-  int32 padded_window_size = opts.frame_opts.PaddedWindowSize();
-  if ((padded_window_size & (padded_window_size-1)) == 0)  // Is a power of two
-    srfft_ = new SplitRadixRealFft<BaseFloat>(padded_window_size);
+  padded_window_size_ = opts.frame_opts.PaddedWindowSize();
+  if ((padded_window_size_ & (padded_window_size_-1)) == 0)  // Is a power of two
+    srfft_ = new SplitRadixRealFft<BaseFloat>(padded_window_size_);
 }
 
-SpectrogramComputer::SpectrogramComputer(const SpectrogramComputer &other):
+FrameFftComputer::FrameFftComputer(const FrameFftComputer &other):
     opts_(other.opts_), log_energy_floor_(other.log_energy_floor_), srfft_(NULL) {
   if (other.srfft_ != NULL)
     srfft_ = new SplitRadixRealFft<BaseFloat>(*other.srfft_);
+  padded_window_size_ = other.Dim();
 }
 
-SpectrogramComputer::~SpectrogramComputer() {
+FrameFftComputer::~FrameFftComputer() {
   delete srfft_;
 }
 
-void SpectrogramComputer::Compute(BaseFloat signal_log_energy,
+void FrameFftComputer::Compute(BaseFloat signal_log_energy,
                                   BaseFloat vtln_warp,
                                   VectorBase<BaseFloat> *signal_frame,
                                   VectorBase<BaseFloat> *feature) {
@@ -62,21 +63,19 @@ void SpectrogramComputer::Compute(BaseFloat signal_log_energy,
   else  // An alternative algorithm that works for non-powers-of-two
     RealFft(signal_frame, true);
 
-  // Convert the FFT into a power spectrum.
-  ComputePowerSpectrum(signal_frame);
+  //Arranged as Re(0),Re(N/2),Re(1),Im(1),...
+  //IT IS IMPORTANT THAT THE WAV ARE READ AS INT16
+  //NOT FLOAT. OTHERWISE THE DISTRIBUTION OF FEATURES 
+  //WILL BE UNSATISFACTORY
+  feature->CopyFromVec(*signal_frame);
+  {
+    feature->ApplyAbs();               //|x|
+    feature->Add(1.0);                 //|x|+1
+    feature->ApplyLog();               //log(|x|+1)
+    signal_frame->ApplyPowAbs(0.0,true);     //sgn(x)
+    feature->MulElements(*signal_frame);
+  }
 
-  SubVector<BaseFloat> power_spectrum(*signal_frame,
-                                      0, signal_frame->Dim() / 2 + 1);
-
-  power_spectrum.ApplyFloor(std::numeric_limits<BaseFloat>::epsilon());
-  power_spectrum.ApplyLog();
-
-  feature->CopyFromVec(power_spectrum);
-  if (opts_.energy_floor > 0.0 && signal_log_energy < log_energy_floor_)
-    signal_log_energy = log_energy_floor_;
-  // The zeroth spectrogram component is always set to the signal energy,
-  // instead of the square of the constant component of the signal.
-  (*feature)(0) = signal_log_energy;
 }
 
 }  // namespace kaldi

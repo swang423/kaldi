@@ -22,7 +22,7 @@
 
 #include "feat/feature-functions.h"
 #include "matrix/matrix-functions.h"
-
+#include "base/kaldi-math.h"
 
 namespace kaldi {
 
@@ -50,6 +50,28 @@ void ComputePowerSpectrum(VectorBase<BaseFloat> *waveform) {
   // if the signal has been bandlimited sensibly this should be zero.
 }
 
+void ComputePhaseSpectrum(VectorBase<BaseFloat> *waveform) {
+  int32 dim = waveform->Dim();
+
+  // no, letting it be non-power-of-two for now.
+  // KALDI_ASSERT(dim > 0 && (dim & (dim-1) == 0));  // make sure a power of two.. actually my FFT code
+  // does not require this (dan) but this is better in case we use different code [dan].
+
+  // RealFft(waveform, true);  // true == forward (not inverse) FFT; makes no difference here,
+  // as we just want power spectrum.
+
+  // now we have in waveform, first half of complex spectrum
+  // it's stored as [real0, realN/2-1, real1, im1, real2, im2, ...]
+  int32 half_dim = dim/2;
+  BaseFloat first_phase = (*waveform)(0)>0?0:M_PI,
+      last_phase =  (*waveform)(1)>0?0:M_PI;  // handle this special case
+  for (int32 i = 1; i < half_dim; i++) {
+    BaseFloat real = (*waveform)(i*2), im = (*waveform)(i*2 + 1);
+    (*waveform)(i) = atan2(im,real);
+  }
+  (*waveform)(0) = first_phase;
+  (*waveform)(half_dim) = last_phase; 
+}
 
 DeltaFeatures::DeltaFeatures(const DeltaFeaturesOptions &opts): opts_(opts) {
   KALDI_ASSERT(opts.order >= 0 && opts.order < 1000);  // just make sure we don't get binary junk.

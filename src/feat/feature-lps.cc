@@ -19,12 +19,12 @@
 // limitations under the License.
 
 
-#include "feat/feature-spectrogram.h"
+#include "feat/feature-lps.h"
 
 
 namespace kaldi {
 
-SpectrogramComputer::SpectrogramComputer(const SpectrogramOptions &opts)
+LpsComputer::LpsComputer(const LpsOptions &opts)
     : opts_(opts), srfft_(NULL) {
   if (opts.energy_floor > 0.0)
     log_energy_floor_ = Log(opts.energy_floor);
@@ -34,17 +34,17 @@ SpectrogramComputer::SpectrogramComputer(const SpectrogramOptions &opts)
     srfft_ = new SplitRadixRealFft<BaseFloat>(padded_window_size);
 }
 
-SpectrogramComputer::SpectrogramComputer(const SpectrogramComputer &other):
+LpsComputer::LpsComputer(const LpsComputer &other):
     opts_(other.opts_), log_energy_floor_(other.log_energy_floor_), srfft_(NULL) {
   if (other.srfft_ != NULL)
     srfft_ = new SplitRadixRealFft<BaseFloat>(*other.srfft_);
 }
 
-SpectrogramComputer::~SpectrogramComputer() {
+LpsComputer::~LpsComputer() {
   delete srfft_;
 }
 
-void SpectrogramComputer::Compute(BaseFloat signal_log_energy,
+void LpsComputer::Compute(BaseFloat signal_log_energy,
                                   BaseFloat vtln_warp,
                                   VectorBase<BaseFloat> *signal_frame,
                                   VectorBase<BaseFloat> *feature) {
@@ -64,7 +64,6 @@ void SpectrogramComputer::Compute(BaseFloat signal_log_energy,
 
   // Convert the FFT into a power spectrum.
   ComputePowerSpectrum(signal_frame);
-
   SubVector<BaseFloat> power_spectrum(*signal_frame,
                                       0, signal_frame->Dim() / 2 + 1);
 
@@ -72,11 +71,15 @@ void SpectrogramComputer::Compute(BaseFloat signal_log_energy,
   power_spectrum.ApplyLog();
 
   feature->CopyFromVec(power_spectrum);
+/*
+  In speech enhancement, we keep the dc instead of the energy
   if (opts_.energy_floor > 0.0 && signal_log_energy < log_energy_floor_)
     signal_log_energy = log_energy_floor_;
   // The zeroth spectrogram component is always set to the signal energy,
   // instead of the square of the constant component of the signal.
   (*feature)(0) = signal_log_energy;
+*/
+
 }
 
 }  // namespace kaldi
