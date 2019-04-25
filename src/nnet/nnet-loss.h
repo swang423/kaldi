@@ -86,7 +86,8 @@ class Xent : public LossItf {
     frames_progress_(0.0),
     xentropy_progress_(0.0),
     entropy_progress_(0.0),
-    elapsed_seconds_(0.0)
+    elapsed_seconds_(0.0),
+    batch_loss_(0.0)
   { }
 
   ~Xent()
@@ -115,7 +116,10 @@ class Xent : public LossItf {
     if (frames_.Sum() == 0) return 0.0;
     return (xentropy_.Sum() - entropy_.Sum()) / frames_.Sum();
   }
-
+  BaseFloat BatchLoss(){
+    if (frames_.Sum() == 0) return 0.0;
+    return batch_loss_;
+  }
  private:
   // main stats collected per target-class,
   CuVector<double> frames_;
@@ -129,6 +133,7 @@ class Xent : public LossItf {
   double entropy_progress_;
   std::vector<float> loss_vec_;
   double elapsed_seconds_;
+  float batch_loss_;
 
   // weigting buffer,
   CuVector<BaseFloat> frame_weights_;
@@ -153,7 +158,8 @@ class Mse : public LossItf {
     frames_(0.0),
     loss_(0.0),
     frames_progress_(0.0),
-    loss_progress_(0.0)
+    loss_progress_(0.0),
+    batch_loss_(0.0)
   { }
 
   ~Mse()
@@ -179,13 +185,15 @@ class Mse : public LossItf {
     if (frames_ == 0) return 0.0;
     return loss_ / frames_;
   }
-
+  BaseFloat BatchLoss(){
+    return batch_loss_;
+  }
  private:
   double frames_;
   double loss_;
-
   double frames_progress_;
   double loss_progress_;
+  double batch_loss_;
   std::vector<float> loss_vec_;
 
   CuVector<BaseFloat> frame_weights_;
@@ -218,9 +226,10 @@ class MultiTaskLoss : public LossItf {
   void Eval(const VectorBase<BaseFloat> &frame_weights,
             const CuMatrixBase<BaseFloat>& net_out,
             const CuMatrixBase<BaseFloat>& target,
-            CuMatrix<BaseFloat>* diff) {
-    KALDI_ERR << "This is not supposed to be called!";
-  }
+            CuMatrix<BaseFloat>* diff);
+//{
+//    KALDI_ERR << "This is not supposed to be called!";
+//  }
 
   /// Evaluate mean square error using target-posteior,
   void Eval(const VectorBase<BaseFloat> &frame_weights,
@@ -242,6 +251,57 @@ class MultiTaskLoss : public LossItf {
   std::vector<int32>     loss_dim_offset_;
 
   CuMatrix<BaseFloat>    tgt_mat_;
+};
+
+class Quartic : public LossItf {
+ public:
+  Quartic(LossOptions &opts):
+    LossItf(opts),
+    frames_(0.0),
+    loss_(0.0),
+    frames_progress_(0.0),
+    loss_progress_(0.0),
+    batch_loss_(0.0)
+  { }
+
+  ~Quartic()
+  { }
+
+  /// Evaluate mean square error using target-matrix,
+  void Eval(const VectorBase<BaseFloat> &frame_weights,
+            const CuMatrixBase<BaseFloat>& net_out,
+            const CuMatrixBase<BaseFloat>& target,
+            CuMatrix<BaseFloat>* diff);
+
+  /// Evaluate mean square error using target-posteior,
+  void Eval(const VectorBase<BaseFloat> &frame_weights,
+            const CuMatrixBase<BaseFloat>& net_out,
+            const Posterior& target,
+            CuMatrix<BaseFloat>* diff);
+
+  /// Generate string with error report
+  std::string Report();
+
+  /// Get loss value (frame average),
+  BaseFloat AvgLoss() {
+    if (frames_ == 0) return 0.0;
+    return loss_ / frames_;
+  }
+  BaseFloat BatchLoss(){
+    return batch_loss_;
+  }
+ private:
+  double frames_;
+  double loss_;
+  double frames_progress_;
+  double loss_progress_;
+  double batch_loss_;
+  std::vector<float> loss_vec_;
+
+  CuVector<BaseFloat> frame_weights_;
+  CuMatrix<BaseFloat> tgt_mat_;
+  CuMatrix<BaseFloat> out_diff_;
+  CuMatrix<BaseFloat> diff_pow_2_;
 };
 
 }  // namespace nnet1

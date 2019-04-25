@@ -512,6 +512,62 @@ class Rescale : public UpdatableComponent {
   CuVector<BaseFloat> scale_data_grad_;
 };
 
+class ExpComponent: public Component {
+ public:
+  ExpComponent(int32 dim_in, int32 dim_out):
+    Component(dim_in, dim_out)
+  { }
+
+  ~ExpComponent()
+  { }
+
+  Component* Copy() const { return new ExpComponent(*this); }
+  ComponentType GetType() const { return kExpComponent; }
+
+  void PropagateFnc(const CuMatrixBase<BaseFloat> &in,
+                    CuMatrixBase<BaseFloat> *out) {
+    out->CopyFromMat(in);
+    out->ApplyExp();
+  }
+
+  void BackpropagateFnc(const CuMatrixBase<BaseFloat> &in,
+                        const CuMatrixBase<BaseFloat> &out,
+                        const CuMatrixBase<BaseFloat> &out_diff,
+                        CuMatrixBase<BaseFloat> *in_diff) {
+    in_diff->AddMatMat(1.0,out_diff,kNoTrans,out,kTrans,0);
+  }
+};
+
+
+class LogComponent: public Component {
+ public:
+  LogComponent(int32 dim_in, int32 dim_out):
+    Component(dim_in, dim_out)
+  { }
+
+  ~LogComponent()
+  { }
+
+  Component* Copy() const { return new LogComponent(*this); }
+  ComponentType GetType() const { return kLogComponent; }
+
+  void PropagateFnc(const CuMatrixBase<BaseFloat> &in,
+                    CuMatrixBase<BaseFloat> *out) {
+    out->CopyFromMat(in);
+    out->ApplyLog();
+  }
+
+  void BackpropagateFnc(const CuMatrixBase<BaseFloat> &in,
+                        const CuMatrixBase<BaseFloat> &out,
+                        const CuMatrixBase<BaseFloat> &out_diff,
+                        CuMatrixBase<BaseFloat> *in_diff) {
+    in_inverse_ = in;
+    in_inverse_.ApplyPow(-1.0);
+    in_diff->AddMatMat(1.0,out_diff,kNoTrans,in_inverse_,kTrans,0);
+  }
+  private:
+   CuMatrix<BaseFloat> in_inverse_;
+};
 }  // namespace nnet1
 }  // namespace kaldi
 
