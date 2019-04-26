@@ -1,3 +1,5 @@
+Speech enhancement based on spectral mapping
+
 This is a bundled software to train a DNN-based speech enhancement 
 network under the Kaldi framework.
 Detailed description can be found in each steps under run/*.sh
