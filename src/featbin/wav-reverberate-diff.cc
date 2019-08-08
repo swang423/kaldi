@@ -163,6 +163,7 @@ int main(int argc, char *argv[]) {
 
     ParseOptions po(usage);
     std::string rir_file;
+    std::string noise_start_times;
     std::string additive_signals;
     std::string snrs;
     std::string start_times;
@@ -208,6 +209,9 @@ int main(int argc, char *argv[]) {
                 "A comma separated list of SNRs(dB). "
                 "The additive signals will be scaled according to these SNRs. "
                 "E.g. --snrs='20.0,0.0,5.0,10.0' ");
+    po.Register("noise-start-times",&noise_start_times,
+                "The segment before this time in additive noise will be discarded."
+                "Effectively adding noise from this time");
     po.Register("start-times", &start_times,
                 "A comma separated list of start times referring to the "
                 "input signal. The additive signals will be added to the "
@@ -294,6 +298,14 @@ int main(int argc, char *argv[]) {
                      "--snrs and --start-times to be set.";
       std::vector<std::string> split_string;
       SplitStringToVector(additive_signals, ",", true, &split_string);
+
+      std::vector<BaseFloat> noise_start_time_vector;
+      if (!noise_start_times.empty()) {
+        ReadCommaSeparatedCommand(noise_start_times, &noise_start_time_vector);
+      }else{//default uses the noise from its beginning
+        for(int32 kk = 0 ; kk < split_string.size(); kk++)
+           noise_start_time_vector.push_back(0); 
+      }
       for (size_t i = 0; i < split_string.size(); i++) {
         WaveHolder waveholder;
         Input ki(split_string[i]);
@@ -313,7 +325,18 @@ int main(int argc, char *argv[]) {
           KALDI_ASSERT(noise_channel < num_channel);
         }
 
-        additive_signal_matrices.push_back(additive_signal_matrix);
+        if(noise_start_time_vector[i] > 0){ //if uses later segment of noise file
+          int32 start_index = (int)(samp_freq * noise_start_time_vector[i]);
+          if(start_index > num_samp){
+            KALDI_WARN << "noise_start_time " << noise_start_time_vector[i]
+                       << " is beyond the noise limit.";
+            start_index = 0;
+          }
+          int32 remaining_range = additive_signal_matrix.NumCols() - start_index;
+          Matrix<BaseFloat> additive_signal_matrix_swap(additive_signal_matrix.ColRange(start_index,remaining_range));
+          additive_signal_matrices.push_back(additive_signal_matrix_swap);
+        }else
+          additive_signal_matrices.push_back(additive_signal_matrix);
       }
     }
 

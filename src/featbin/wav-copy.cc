@@ -34,9 +34,11 @@ int main(int argc, char *argv[]) {
         "e.g. wav-copy scp:wav.scp ark:-\n"
         "     wav-copy wav.ark:123456 -\n"
         "See also: wav-to-duration extract-segments\n";
-
+    
     ParseOptions po(usage);
 
+    bool mix = false;
+    po.Register("mix",&mix,"allow mixing rspecifier and wxfilename. rspecifier has 1 line only");
     po.Read(argc, argv);
 
     if (po.NumArgs() != 2) {
@@ -52,21 +54,36 @@ int main(int argc, char *argv[]) {
         out_is_wspecifier = (ClassifyWspecifier(wav_out_fn, NULL, NULL, NULL)
                               != kNoWspecifier);
 
-    if (in_is_rspecifier != out_is_wspecifier)
+    if (in_is_rspecifier != out_is_wspecifier && !mix)
       KALDI_ERR << "Cannot mix archives with regular files";
 
     if (in_is_rspecifier) {
       int32 num_done = 0;
 
       SequentialTableReader<WaveHolder> wav_reader(wav_in_fn);
-      TableWriter<WaveHolder> wav_writer(wav_out_fn);
 
-      for (; !wav_reader.Done(); wav_reader.Next()) {
-        wav_writer.Write(wav_reader.Key(), wav_reader.Value());
-        num_done++;
+      if(mix){
+        if(!wav_reader.Done()){
+            WaveData wd = wav_reader.Value();
+            bool binary=true;
+            Output ko(wav_out_fn, binary, false);
+            if (!WaveHolder::Write(ko.Stream(), true, wd)){
+                KALDI_ERR << "Write failure to "
+                        << PrintableWxfilename(wav_out_fn);
+            }
+        }else{
+            KALDI_ERR << "Failed to open " << wav_in_fn << " for reading";
+        }
+      }else{
+          TableWriter<WaveHolder> wav_writer(wav_out_fn);
+
+          for (; !wav_reader.Done(); wav_reader.Next()) {
+            wav_writer.Write(wav_reader.Key(), wav_reader.Value());
+            num_done++;
+          }
+          KALDI_LOG << "Copied " << num_done << " wave files";
+          return (num_done != 0 ? 0 : 1);
       }
-      KALDI_LOG << "Copied " << num_done << " wave files";
-      return (num_done != 0 ? 0 : 1);
     } else {
       bool binary = true;
       Input ki(wav_in_fn, &binary);

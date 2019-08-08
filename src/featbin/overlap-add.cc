@@ -9,8 +9,7 @@
 #include "feat/wave-reader.h"
 
 namespace kaldi {
-    void ComputeFftSpectrum(SubVector<BaseFloat> lps_,SubVector<BaseFloat> phs_,Vector<BaseFloat
-> *fft_) {
+    void ComputeFftSpectrum(SubVector<BaseFloat> lps_,SubVector<BaseFloat> phs_,Vector<BaseFloat> *fft_) {
     //Inverse of ComputePowerSpectrum
     //it's stored as [real0, realN/2-1, real1, im1, real2, im2, ...]
         KALDI_ASSERT(lps_.Dim() == phs_.Dim());
@@ -33,7 +32,7 @@ namespace kaldi {
     }
     void GetHammingWindow(std::string type, int32 size, Vector<BaseFloat> *w){
         if(type == "rectangular"){
-          for (int32 i = 0; i < size; i++)
+          for (int32 i = 0; i < size; i++) 
             (*w)(i) = 1.0;
         }else if(type == "hamming") {
           double a = M_2PI / (size-1);
@@ -65,18 +64,20 @@ int main(int argc, char *argv[]) {
     ParseOptions po(usage);
       BaseFloat fs = 16000;
       po.Register("fs",&fs,"Sampling frequency");
-      int32 window_shift = 256, fft_size = 512;
+      int32 window_shift = 256, fft_size = 512, len_tolerance=0;
       po.Register("window-shift",&window_shift, "window shift in samples");
       po.Register("fft-size", &fft_size, "inverse FFT size");
       std::string window_type = "hamming",
                   output_dir = "./";
       po.Register("window-type", &window_type, "Type of window (\"hamming\") only");
       po.Register("output-dir", &output_dir, "Output directory");
+      po.Register("len-tolerance",&len_tolerance,"Length tolerance if mag and phs do not match");
 /*
        int32 WindowShift() const {
           return static_cast<int32>(samp_freq * 0.001 * frame_shift_ms);
         }
 */
+
     po.Read(argc, argv);
     bool out_is_rspecifier;
     if ( po.NumArgs() == 3) {
@@ -129,7 +130,14 @@ int main(int argc, char *argv[]) {
       const Matrix<BaseFloat>& lps = lps_reader.Value();
       const Matrix<BaseFloat>& phs = phs_reader.Value();
       int32 num_frames = lps.NumRows(), lps_dim = lps.NumCols();
-      KALDI_ASSERT(num_frames == phs.NumRows());
+      if(len_tolerance==0){
+        KALDI_ASSERT(num_frames == phs.NumRows());
+      }else{
+        if(phs.NumRows() - num_frames > len_tolerance){
+          KALDI_ERR << "Length mismatch of " << phs.NumRows() - num_frames 
+                    << " is beyond specified tolerance: " << len_tolerance;
+        }
+      }
       KALDI_ASSERT(lps_dim == phs.NumCols());
       //init
       int32 signal_length = fft_size + (num_frames-1)*window_shift;
@@ -149,12 +157,12 @@ int main(int argc, char *argv[]) {
       wav_vector.DivElements(wav_denominator);
       RoundToInt(&wav_vector);
       if(wav_vector.Max() > kWaveSampleMax){
-        KALDI_WARN << "Maximum " << wav_vector.Max() << " exceeds ceiling in utt "
+        KALDI_WARN << "Maximum " << wav_vector.Max() << " exceeds ceiling in utt " 
                    << key;
         wav_vector.ApplyCeiling(kWaveSampleMax);
       }
       if(wav_vector.Min() < kWaveSampleMin){
-        KALDI_WARN << "Minimum " << wav_vector.Min() << " exceeds floor in utt "
+        KALDI_WARN << "Minimum " << wav_vector.Min() << " exceeds floor in utt " 
                    << key;
         wav_vector.ApplyFloor(kWaveSampleMin);
       }
@@ -184,4 +192,5 @@ int main(int argc, char *argv[]) {
     return -1;
   }
 }
+
 
